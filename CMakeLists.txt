@@ -12,13 +12,23 @@ include(FetchContent)
 # Matikan build examples discord-rpc
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
-# --- 1. Discord RPC ---
+# --- 1. Discord RPC (dengan auto-fix file .clang-format) ---
 FetchContent_Declare(
     discord_rpc
     GIT_REPOSITORY https://github.com/discord/discord-rpc.git
     GIT_TAG        master
 )
-FetchContent_MakeAvailable(discord_rpc)
+
+FetchContent_GetProperties(discord_rpc)
+if(NOT discord_rpc_POPULATED)
+    FetchContent_Populate(discord_rpc)
+    
+    # Hapus file .clang-format yang korup dari discord-rpc
+    file(REMOVE "${discord_rpc_SOURCE_DIR}/.clang-format")
+    
+    # Masukkan sebagai subproject
+    add_subdirectory(${discord_rpc_SOURCE_DIR} ${discord_rpc_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
 
 # --- 2. JSON Parser ---
 FetchContent_Declare(
