@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.16...3.30)
 
-# Izinkan CMake lawas (discord-rpc) berjalan tanpa error di CMake 3.30+
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
 
 project(DiscordPresence LANGUAGES CXX C)
@@ -10,13 +9,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+# Matikan build examples discord-rpc
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
 # --- 1. Discord RPC ---
 FetchContent_Declare(
     discord_rpc
     GIT_REPOSITORY https://github.com/discord/discord-rpc.git
     GIT_TAG        master
 )
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(discord_rpc)
 
 # --- 2. JSON Parser ---
@@ -27,7 +28,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
-# --- Executable Target ---
+# --- Target Executable ---
 add_executable(discord_presence src/main.cpp)
 
 target_include_directories(discord_presence PRIVATE src)
