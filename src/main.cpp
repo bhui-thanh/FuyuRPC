@@ -28,18 +28,15 @@ int main() {
         std::ifstream f("config.json");
         if (f.is_open()) cfg = json::parse(f, nullptr, false);
         if (cfg.is_discarded() || cfg.empty()) {
-            printf("[WARN] config.json not found or invalid. Creating default config...\n");
             cfg["app_id"] = "";
-            cfg["bot_token"] = "";
             cfg["update_ms"] = 5000;
             std::ofstream out("config.json");
             out << cfg.dump(4);
         }
     }
 
-    std::string app_id    = cfg.value("app_id", "");
-    std::string bot_token = cfg.value("bot_token", "");
-    int update_ms         = cfg.value("update_ms", 5000);
+    std::string app_id = cfg.value("app_id", "");
+    int update_ms      = cfg.value("update_ms", 5000);
 
     if (app_id.empty()) {
         printf("[ERR] Set 'app_id' in config.json first!\n");
@@ -70,12 +67,12 @@ int main() {
         return 0;
     }
 
-    // === AUTO EXTRACT & UPLOAD ICON ===
-    std::string asset_key = "default";
+    // === AUTO EXTRACT & GET URL ===
+    std::string icon_url = "";
     if (!selected.full_path.empty()) {
         std::string png_path = extract_exe_icon(selected.full_path, selected.exe_name);
         if (!png_path.empty()) {
-            asset_key = sync_and_upload_icon(app_id, bot_token, selected.exe_name, png_path);
+            icon_url = get_or_upload_icon_url(selected.exe_name, png_path);
         }
     }
 
@@ -109,7 +106,7 @@ int main() {
                                       ? selected.exe_name
                                       : selected.window_title;
 
-            rpc_set(details, state, asset_key, title, start_ts);
+            rpc_set(details, state, icon_url, title, start_ts);
         } else {
             printf("[PRESENCE] Process ended.\n");
             rpc_clear();
