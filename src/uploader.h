@@ -9,7 +9,7 @@
 using json = nlohmann::json;
 #pragma comment(lib, "winhttp.lib")
 
-// Baca file PNG binary
+// Helper baca file PNG
 inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) return {};
@@ -20,20 +20,20 @@ inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     return buffer;
 }
 
-// Upload ke Catbox API (https://catbox.moe/user/api.php)
-inline std::string upload_to_catbox(const std::vector<BYTE>& bytes) {
+// Upload ke Imgur (Paling Aman untuk Discord)
+inline std::string upload_to_imgur(const std::vector<BYTE>& bytes) {
     if (bytes.empty()) return "";
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return "";
 
-    HINTERNET hConnect = WinHttpConnect(hSession, L"catbox.moe", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, L"api.imgur.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
 
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/user/api.php",
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/3/image",
                                            nullptr, WINHTTP_NO_REFERER,
                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            WINHTTP_FLAG_SECURE);
@@ -43,30 +43,27 @@ inline std::string upload_to_catbox(const std::vector<BYTE>& bytes) {
         return "";
     }
 
-    std::string boundary = "----WebKitFormBoundaryFuyuRPC7MA4YWxk";
-    std::string contentType = "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n";
+    // Pakai Client-ID Imgur Publik (Ini aman dan umum digunakan)
+    std::string boundary = "----WebKitFormBoundaryImgurFuyuRPC";
+    std::string headers = "Authorization: Client-ID 5440db00647c493\r\n"
+                          "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n";
     
-    int whlen = MultiByteToWideChar(CP_UTF8, 0, contentType.c_str(), -1, nullptr, 0);
-    std::wstring wContentType(whlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, contentType.c_str(), -1, &wContentType[0], whlen);
+    int whlen = MultiByteToWideChar(CP_UTF8, 0, headers.c_str(), -1, nullptr, 0);
+    std::wstring wHeaders(whlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, headers.c_str(), -1, &wHeaders[0], whlen);
 
-    // Format multipart Catbox: reqtype=fileupload + fileToUpload
     std::string p1 = "--" + boundary + "\r\n"
-                     "Content-Disposition: form-data; name=\"reqtype\"\r\n\r\n"
-                     "fileupload\r\n";
-    std::string p2 = "--" + boundary + "\r\n"
-                     "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"icon.png\"\r\n"
+                     "Content-Disposition: form-data; name=\"image\"; filename=\"icon.png\"\r\n"
                      "Content-Type: image/png\r\n\r\n";
-    std::string p3 = "\r\n--" + boundary + "--\r\n";
+    std::string p2 = "\r\n--" + boundary + "--\r\n";
 
     std::vector<BYTE> body;
     body.insert(body.end(), p1.begin(), p1.end());
-    body.insert(body.end(), p2.begin(), p2.end());
     body.insert(body.end(), bytes.begin(), bytes.end());
-    body.insert(body.end(), p3.begin(), p3.end());
+    body.insert(body.end(), p2.begin(), p2.end());
 
     BOOL bResults = WinHttpSendRequest(hRequest,
-                                       wContentType.c_str(), (DWORD)-1,
+                                       wHeaders.c_str(), (DWORD)-1,
                                        body.data(),
                                        (DWORD)body.size(),
                                        (DWORD)body.size(), 0);
@@ -80,7 +77,6 @@ inline std::string upload_to_catbox(const std::vector<BYTE>& bytes) {
             DWORD dwDownloaded = 0;
             WinHttpQueryDataAvailable(hRequest, &dwSize);
             if (dwSize == 0) break;
-
             std::vector<char> buf(dwSize + 1, 0);
             if (WinHttpReadData(hRequest, buf.data(), dwSize, &dwDownloaded)) {
                 response.append(buf.data(), dwDownloaded);
@@ -92,19 +88,22 @@ inline std::string upload_to_catbox(const std::vector<BYTE>& bytes) {
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    // Clean response URL
-    while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
-        response.pop_back();
+    try {
+        auto j = json::parse(response);
+        if (j.contains("data") && j["data"].contains("link")) {
+            return j["data"]["link"].get<std::string>();
+        }
+    } catch (...) {
+        printf("[ICON] Gagal parse Imgur: %s\n", response.c_str());
+    }
 
-    return response;
+    return "";
 }
 
-// Handler utama: Cek cache & Upload
 inline std::string get_or_upload_icon_url(const std::string& exe_name, const std::string& png_path) {
     const std::string cache_file = "icons/cache.json";
     json cacheObj = json::object();
 
-    // 1. Cek Cache Lokal
     std::ifstream in(cache_file);
     if (in.is_open()) {
         try { in >> cacheObj; } catch (...) {}
@@ -112,23 +111,17 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
     }
 
     if (cacheObj.contains(exe_name) && cacheObj[exe_name].is_string()) {
-        std::string cached_url = cacheObj[exe_name].get<std::string>();
-        printf("[ICON] Using cached CDN URL: %s\n", cached_url.c_str());
-        return cached_url;
+        return cacheObj[exe_name].get<std::string>();
     }
 
     auto bytes = read_png_bytes(png_path);
-    if (bytes.empty()) {
-        printf("[ICON] Failed to open PNG file: %s\n", png_path.c_str());
-        return "";
-    }
+    if (bytes.empty()) return "";
 
-    printf("[ICON] Uploading icon to Catbox CDN...\n");
-    std::string url = upload_to_catbox(bytes);
+    printf("[ICON] Uploading icon to Imgur (Discord-Friendly CDN)...\n");
+    std::string url = upload_to_imgur(bytes);
 
-    // Sukses (harus diawali http)
-    if (!url.empty() && url.rfind("http", 0) == 0) {
-        printf("[ICON] SUCCESS! Direct CDN URL: %s\n", url.c_str());
+    if (!url.empty()) {
+        printf("[ICON] SUCCESS! Direct URL: %s\n", url.c_str());
         cacheObj[exe_name] = url;
         std::ofstream out(cache_file);
         if (out.is_open()) {
@@ -136,7 +129,7 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
         }
         return url;
     } else {
-        printf("[ICON] Upload failed! Server Response: %s\n", url.c_str());
+        printf("[ICON] Imgur upload failed.\n");
         return "";
     }
 }
