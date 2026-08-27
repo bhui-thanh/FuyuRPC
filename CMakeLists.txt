@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
+
+# BYPASS: Izinkan dependency lama (discord-rpc) berjalan di CMake versi baru (>= 3.30)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+
 project(DiscordPresence LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -6,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# --- 1. Auto-download Discord RPC ---
+# --- 1. Discord RPC ---
 FetchContent_Declare(
     discord_rpc
     GIT_REPOSITORY https://github.com/discord/discord-rpc.git
@@ -15,7 +19,7 @@ FetchContent_Declare(
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(discord_rpc)
 
-# --- 2. Auto-download nlohmann/json ---
+# --- 2. JSON Parser ---
 FetchContent_Declare(
     json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
