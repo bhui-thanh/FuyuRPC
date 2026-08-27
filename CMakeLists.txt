@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# 1. Matikan ClangFormat bawaan discord-rpc agar tidak error
+# Matikan ClangFormat bawaan discord-rpc
 set(CLANG_FORMAT_EXE "CLANG_FORMAT_EXE-NOTFOUND" CACHE FILEPATH "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
@@ -33,7 +33,6 @@ FetchContent_MakeAvailable(json)
 # --- Executable Target ---
 add_executable(discord_presence src/main.cpp)
 
-# TAMBAHKAN PATH HEADER DISCORD RPC DI SINI
 target_include_directories(discord_presence PRIVATE 
     src
     ${discord_rpc_SOURCE_DIR}/include
@@ -54,10 +53,4 @@ target_compile_definitions(discord_presence PRIVATE
     _CRT_SECURE_NO_WARNINGS
     UNICODE
     _UNICODE
-)
-
-add_custom_command(TARGET discord_presence POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/config.json
-        $<TARGET_FILE_DIR:discord_presence>/config.json
 )
