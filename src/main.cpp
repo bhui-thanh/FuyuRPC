@@ -29,14 +29,16 @@ int main() {
         if (f.is_open()) cfg = json::parse(f, nullptr, false);
         if (cfg.is_discarded() || cfg.empty()) {
             cfg["app_id"] = "";
+            cfg["webhook_url"] = "";
             cfg["update_ms"] = 5000;
             std::ofstream out("config.json");
             out << cfg.dump(4);
         }
     }
 
-    std::string app_id = cfg.value("app_id", "");
-    int update_ms      = cfg.value("update_ms", 5000);
+    std::string app_id      = cfg.value("app_id", "");
+    std::string webhook_url = cfg.value("webhook_url", "");
+    int update_ms           = cfg.value("update_ms", 5000);
 
     if (app_id.empty()) {
         printf("[ERR] Set 'app_id' in config.json first!\n");
@@ -67,12 +69,12 @@ int main() {
         return 0;
     }
 
-    // === AUTO EXTRACT & GET URL ===
+    // === AUTO EXTRACT & UPLOAD TO DISCORD CDN ===
     std::string icon_url = "";
     if (!selected.full_path.empty()) {
         std::string png_path = extract_exe_icon(selected.full_path, selected.exe_name);
         if (!png_path.empty()) {
-            icon_url = get_or_upload_icon_url(selected.exe_name, png_path);
+            icon_url = get_or_upload_icon_url(selected.exe_name, png_path, webhook_url);
         }
     }
 
