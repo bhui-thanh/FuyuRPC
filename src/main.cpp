@@ -27,9 +27,13 @@ int main() {
     {
         std::ifstream f("config.json");
         if (f.is_open()) cfg = json::parse(f, nullptr, false);
-        if (cfg.is_discarded()) {
-            printf("[ERR] config.json invalid or missing!\n");
-            return 1;
+        if (cfg.is_discarded() || cfg.empty()) {
+            printf("[WARN] config.json not found or invalid. Creating default config...\n");
+            cfg["app_id"] = "";
+            cfg["bot_token"] = "";
+            cfg["update_ms"] = 5000;
+            std::ofstream out("config.json");
+            out << cfg.dump(4);
         }
     }
 
@@ -38,7 +42,9 @@ int main() {
     int update_ms         = cfg.value("update_ms", 5000);
 
     if (app_id.empty()) {
-        printf("[ERR] Set app_id in config.json first!\n");
+        printf("[ERR] Set 'app_id' in config.json first!\n");
+        printf("Press Enter to exit...");
+        getchar();
         return 1;
     }
 
@@ -69,7 +75,6 @@ int main() {
     if (!selected.full_path.empty()) {
         std::string png_path = extract_exe_icon(selected.full_path, selected.exe_name);
         if (!png_path.empty()) {
-            // Upload otomatis ke Discord via API
             asset_key = sync_and_upload_icon(app_id, bot_token, selected.exe_name, png_path);
         }
     }
@@ -91,15 +96,15 @@ int main() {
 
         if (alive) {
             auto now = std::chrono::system_clock::now();
-            auto mins = std::chrono::duration_cast<std::chrono::minutes>(now - start_time).count();
-            auto hrs  = mins / 60;
-            mins %= 60;
+            auto total_mins = std::chrono::duration_cast<std::chrono::minutes>(now - start_time).count();
+            auto hrs  = total_mins / 60;
+            auto mins = total_mins % 60;
 
             char timebuf[64];
-            snprintf(timebuf, sizeof(timebuf), "%02lld:%02lld", hrs, mins);
+            snprintf(timebuf, sizeof(timebuf), "%02lld:%02lld", (long long)hrs, (long long)mins);
 
             std::string details = "Playing " + selected.exe_name;
-            std::string state   = std::string("Time: ") + timebuf;
+            std::string state   = std::string("Session: ") + timebuf;
             std::string title   = selected.window_title.empty()
                                       ? selected.exe_name
                                       : selected.window_title;
