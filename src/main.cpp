@@ -20,7 +20,7 @@ int main() {
     std::signal(SIGTERM, sig);
 
     printf("╔════════════════════════════════════════════════╗\n");
-    printf("║ Discord Rich Presence — Full Auto Icon Sync   ║\n");
+    printf("║ Discord Rich Presence — Litterbox Auto Mode    ║\n");
     printf("╚════════════════════════════════════════════════╝\n\n");
 
     json cfg;
@@ -67,7 +67,7 @@ int main() {
         return 0;
     }
 
-    // === AUTO EXTRACT & UPLOAD TO CATBOX ===
+    // === AUTO EXTRACT & UPLOAD TO LITTERBOX ===
     std::string icon_url = "";
     if (!selected.full_path.empty()) {
         std::string png_path = extract_exe_icon(selected.full_path, selected.exe_name);
