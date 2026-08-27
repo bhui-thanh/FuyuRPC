@@ -9,8 +9,8 @@
 using json = nlohmann::json;
 #pragma comment(lib, "winhttp.lib")
 
-// Baca file PNG lokal ke binary
-inline std::vector<BYTE> read_png_binary(const std::string& path) {
+// Baca binary PNG
+inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) return {};
     std::streamsize size = file.tellg();
@@ -20,22 +20,39 @@ inline std::vector<BYTE> read_png_binary(const std::string& path) {
     return buffer;
 }
 
-// WinHTTP POST Multipart helper
-inline std::string winhttp_post_multipart(const std::wstring& host,
-                                         const std::wstring& path,
-                                         const std::string& field_name,
-                                         const std::string& filename,
-                                         const std::vector<BYTE>& file_bytes) {
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) FuyuRPC/1.0",
+// Upload file langsung ke Discord Webhook (cdn.discordapp.com)
+inline std::string upload_to_discord_webhook(const std::string& webhook_url, const std::vector<BYTE>& bytes) {
+    if (webhook_url.empty()) return "";
+
+    // Parse Webhook URL: https://discord.com/api/webhooks/ID/TOKEN
+    std::string prefix = "https://discord.com";
+    std::string path = webhook_url;
+    if (path.find(prefix) == 0) {
+        path = path.substr(prefix.length());
+    } else {
+        size_t pos = webhook_url.find("/api/webhooks/");
+        if (pos != std::string::npos) {
+            path = webhook_url.substr(pos);
+        } else {
+            printf("[UPLOADER] Invalid Webhook URL format!\n");
+            return "";
+        }
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"DiscordPresence/1.0",
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return "";
 
-    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, L"discord.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
 
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(),
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    std::wstring wPath(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wPath[0], wlen);
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", wPath.c_str(),
                                            nullptr, WINHTTP_NO_REFERER,
                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            WINHTTP_FLAG_SECURE);
@@ -45,25 +62,25 @@ inline std::string winhttp_post_multipart(const std::wstring& host,
         return "";
     }
 
-    std::string boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
-    std::string contentType = "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n";
+    std::string boundary = "----DiscordWebhookBoundary8934275";
+    std::string header = "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n";
     
-    int whlen = MultiByteToWideChar(CP_UTF8, 0, contentType.c_str(), -1, nullptr, 0);
-    std::wstring wContentType(whlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, contentType.c_str(), -1, &wContentType[0], whlen);
+    int whlen = MultiByteToWideChar(CP_UTF8, 0, header.c_str(), -1, nullptr, 0);
+    std::wstring wHeader(whlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, header.c_str(), -1, &wHeader[0], whlen);
 
     std::string bodyHead = "--" + boundary + "\r\n"
-                           "Content-Disposition: form-data; name=\"" + field_name + "\"; filename=\"" + filename + "\"\r\n"
+                           "Content-Disposition: form-data; name=\"files[0]\"; filename=\"icon.png\"\r\n"
                            "Content-Type: image/png\r\n\r\n";
     std::string bodyTail = "\r\n--" + boundary + "--\r\n";
 
     std::vector<BYTE> fullBody;
     fullBody.insert(fullBody.end(), bodyHead.begin(), bodyHead.end());
-    fullBody.insert(fullBody.end(), file_bytes.begin(), file_bytes.end());
+    fullBody.insert(fullBody.end(), bytes.begin(), bytes.end());
     fullBody.insert(fullBody.end(), bodyTail.begin(), bodyTail.end());
 
     BOOL bResults = WinHttpSendRequest(hRequest,
-                                       wContentType.c_str(), (DWORD)-1,
+                                       wHeader.c_str(), (DWORD)-1,
                                        fullBody.data(),
                                        (DWORD)fullBody.size(),
                                        (DWORD)fullBody.size(), 0);
@@ -89,38 +106,20 @@ inline std::string winhttp_post_multipart(const std::wstring& host,
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    // Trim whitespace/newline
-    while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
-        response.pop_back();
-
-    return response;
-}
-
-// Upload ke 0x0.st (Super Cepat & Langsung mengembalikan direct URL)
-inline std::string upload_to_0x0(const std::vector<BYTE>& bytes) {
-    return winhttp_post_multipart(L"0x0.st", L"/", "file", "icon.png", bytes);
-}
-
-// Upload ke tmpfiles.org (Sebagai Fallback)
-inline std::string upload_to_tmpfiles(const std::vector<BYTE>& bytes) {
-    std::string res = winhttp_post_multipart(L"tmpfiles.org", L"/api/v1/upload", "file", "icon.png", bytes);
     try {
-        auto j = json::parse(res);
-        if (j.contains("data") && j["data"].contains("url")) {
-            std::string url = j["data"]["url"].get<std::string>();
-            // Ganti tmpfiles.org/123/icon.png -> tmpfiles.org/dl/123/icon.png (Direct Image)
-            size_t pos = url.find("tmpfiles.org/");
-            if (pos != std::string::npos) {
-                url.insert(pos + 13, "dl/");
-            }
-            return url;
+        auto j = json::parse(response);
+        if (j.contains("attachments") && j["attachments"].is_array() && !j["attachments"].empty()) {
+            return j["attachments"][0].value("url", "");
         }
     } catch (...) {}
+
     return "";
 }
 
-// Upload & Cache Handler
-inline std::string get_or_upload_icon_url(const std::string& exe_name, const std::string& png_path) {
+// Handler utama: Cek cache & Upload
+inline std::string get_or_upload_icon_url(const std::string& exe_name, 
+                                         const std::string& png_path, 
+                                         const std::string& webhook_url) {
     const std::string cache_file = "icons/cache.json";
     json cacheObj = json::object();
 
@@ -133,29 +132,27 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
 
     if (cacheObj.contains(exe_name) && cacheObj[exe_name].is_string()) {
         std::string cached_url = cacheObj[exe_name].get<std::string>();
-        printf("[ICON] Using cached URL: %s\n", cached_url.c_str());
+        printf("[ICON] Using cached Discord CDN URL: %s\n", cached_url.c_str());
         return cached_url;
     }
 
-    auto bytes = read_png_binary(png_path);
+    auto bytes = read_png_bytes(png_path);
     if (bytes.empty()) {
         printf("[ICON] Failed to open PNG file: %s\n", png_path.c_str());
         return "";
     }
 
-    // 2. Coba Upload ke Server Utama (0x0.st)
-    printf("[ICON] Uploading icon to CDN (0x0.st)...\n");
-    std::string url = upload_to_0x0(bytes);
-
-    // 3. Jika gagal, coba ke Fallback Server (tmpfiles.org)
-    if (url.empty() || url.rfind("http", 0) != 0) {
-        printf("[ICON] Primary CDN failed, trying fallback CDN...\n");
-        url = upload_to_tmpfiles(bytes);
+    std::string url = "";
+    if (!webhook_url.empty()) {
+        printf("[ICON] Uploading icon directly to Discord CDN via Webhook...\n");
+        url = upload_to_discord_webhook(webhook_url, bytes);
+    } else {
+        printf("[ICON] Warning: 'webhook_url' is empty in config.json! Discord might reject public CDN links.\n");
     }
 
-    // 4. Sukses
-    if (!url.empty() && url.rfind("http", 0) == 0) {
-        printf("[ICON] SUCCESS! Uploaded to: %s\n", url.c_str());
+    // Sukses
+    if (!url.empty()) {
+        printf("[ICON] SUCCESS! Discord CDN URL: %s\n", url.c_str());
         cacheObj[exe_name] = url;
         std::ofstream out(cache_file);
         if (out.is_open()) {
@@ -163,7 +160,7 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
         }
         return url;
     } else {
-        printf("[ICON] All upload providers failed. Running without custom icon.\n");
+        printf("[ICON] Upload failed. Please check your 'webhook_url' in config.json.\n");
         return "";
     }
 }
