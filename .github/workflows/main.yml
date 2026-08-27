@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          mkdir dist
+          Copy-Item build/Release/discord_presence.exe dist/
+          Copy-Item config.json dist/
+          New-Item -ItemType Directory -Force -Path dist/icons
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: discord-presence-win-x64
+          path: dist/
