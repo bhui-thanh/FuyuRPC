@@ -29,16 +29,14 @@ int main() {
         if (f.is_open()) cfg = json::parse(f, nullptr, false);
         if (cfg.is_discarded() || cfg.empty()) {
             cfg["app_id"] = "";
-            cfg["webhook_url"] = "";
             cfg["update_ms"] = 5000;
             std::ofstream out("config.json");
             out << cfg.dump(4);
         }
     }
 
-    std::string app_id      = cfg.value("app_id", "");
-    std::string webhook_url = cfg.value("webhook_url", "");
-    int update_ms           = cfg.value("update_ms", 5000);
+    std::string app_id = cfg.value("app_id", "");
+    int update_ms      = cfg.value("update_ms", 5000);
 
     if (app_id.empty()) {
         printf("[ERR] Set 'app_id' in config.json first!\n");
@@ -69,12 +67,12 @@ int main() {
         return 0;
     }
 
-    // === AUTO EXTRACT & UPLOAD TO DISCORD CDN ===
+    // === AUTO EXTRACT & UPLOAD ===
     std::string icon_url = "";
     if (!selected.full_path.empty()) {
         std::string png_path = extract_exe_icon(selected.full_path, selected.exe_name);
         if (!png_path.empty()) {
-            icon_url = get_or_upload_icon_url(selected.exe_name, png_path, webhook_url);
+            icon_url = get_or_upload_icon_url(selected.exe_name, png_path);
         }
     }
 
@@ -103,7 +101,7 @@ int main() {
             snprintf(timebuf, sizeof(timebuf), "%02lld:%02lld", (long long)hrs, (long long)mins);
 
             std::string details = "Playing " + selected.exe_name;
-            std::string state   = std::string("Session: ") + timebuf;
+            std::string state   = std::string("Playing for: ") + timebuf;
             std::string title   = selected.window_title.empty()
                                       ? selected.exe_name
                                       : selected.window_title;
