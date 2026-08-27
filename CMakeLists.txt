@@ -1,9 +1,9 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.16...3.30)
 
-# BYPASS: Izinkan dependency lama (discord-rpc) berjalan di CMake versi baru (>= 3.30)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+# Izinkan CMake lawas (discord-rpc) berjalan tanpa error di CMake 3.30+
+set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
 
-project(DiscordPresence LANGUAGES CXX)
+project(DiscordPresence LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,7 +27,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
-# --- Target Executable ---
+# --- Executable Target ---
 add_executable(discord_presence src/main.cpp)
 
 target_include_directories(discord_presence PRIVATE src)
