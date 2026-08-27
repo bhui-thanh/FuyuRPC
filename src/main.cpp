@@ -67,7 +67,7 @@ int main() {
         return 0;
     }
 
-    // === AUTO EXTRACT & UPLOAD ===
+    // === AUTO EXTRACT & UPLOAD TO CATBOX ===
     std::string icon_url = "";
     if (!selected.full_path.empty()) {
         std::string png_path = extract_exe_icon(selected.full_path, selected.exe_name);
@@ -101,7 +101,7 @@ int main() {
             snprintf(timebuf, sizeof(timebuf), "%02lld:%02lld", (long long)hrs, (long long)mins);
 
             std::string details = "Playing " + selected.exe_name;
-            std::string state   = std::string("Playing for: ") + timebuf;
+            std::string state   = std::string("Session: ") + timebuf;
             std::string title   = selected.window_title.empty()
                                       ? selected.exe_name
                                       : selected.window_title;
