@@ -9,86 +9,70 @@
 using json = nlohmann::json;
 #pragma comment(lib, "winhttp.lib")
 
-// Baca binary PNG dengan Log Debug
+// Baca file PNG binary
 inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        printf("[DEBUG] Gagal membuka file lokal: %s\n", path.c_str());
-        return {};
-    }
+    if (!file.is_open()) return {};
     std::streamsize size = file.tellg();
     file.seekg(0, std::ios::beg);
     std::vector<BYTE> buffer(size);
-    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-        printf("[DEBUG] Gagal membaca buffer file PNG!\n");
-        return {};
-    }
-    printf("[DEBUG] File PNG berhasil dibaca: %zu bytes\n", buffer.size());
+    file.read(reinterpret_cast<char*>(buffer.data()), size);
     return buffer;
 }
 
-// Upload ke Litterbox dengan Verbose Debugging
+// Upload ke Litterbox (Format Multipart Presisi 1:1)
 inline std::string upload_to_litterbox(const std::vector<BYTE>& file_data) {
-    if (file_data.empty()) {
-        printf("[DEBUG] File PNG kosong (0 bytes), upload dibatalkan.\n");
-        return "";
-    }
+    if (file_data.empty()) return "";
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) {
-        printf("[DEBUG] WinHttpOpen Gagal! Error: %lu\n", GetLastError());
-        return "";
-    }
+    if (!hSession) return "";
 
     HINTERNET hConnect = WinHttpConnect(hSession, L"litterbox.catbox.moe", INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) {
-        printf("[DEBUG] WinHttpConnect Gagal! Error: %lu\n", GetLastError());
-        WinHttpCloseHandle(hSession);
-        return "";
-    }
+    if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/resources/internals/api.php",
                                            nullptr, WINHTTP_NO_REFERER,
                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            WINHTTP_FLAG_SECURE);
     if (!hRequest) {
-        printf("[DEBUG] WinHttpOpenRequest Gagal! Error: %lu\n", GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return "";
     }
 
-    // Boundary unik standar Chrome
-    std::string boundary = "----WebKitFormBoundaryFuyuRPC9876543210";
-    std::wstring headers = L"Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryFuyuRPC9876543210\r\n";
+    // Boundary Murni Tanpa Prefix Dash Tambahan
+    std::string boundary_id = "FuyuRPCBoundary123456789";
+    std::wstring headers = L"Content-Type: multipart/form-data; boundary=FuyuRPCBoundary123456789\r\n";
 
-    // 1. Head part (reqtype & time)
-    std::string partHead = "";
-    partHead += "--" + boundary + "\r\n";
-    partHead += "Content-Disposition: form-data; name=\"reqtype\"\r\n\r\n";
-    partHead += "fileupload\r\n";
-    
-    partHead += "--" + boundary + "\r\n";
-    partHead += "Content-Disposition: form-data; name=\"time\"\r\n\r\n";
-    partHead += "24h\r\n";
+    // 1. Parameter: reqtype=fileupload
+    std::string bodyHead = "";
+    bodyHead += "--" + boundary_id + "\r\n";
+    bodyHead += "Content-Disposition: form-data; name=\"reqtype\"\r\n\r\n";
+    bodyHead += "fileupload\r\n";
 
-    partHead += "--" + boundary + "\r\n";
-    partHead += "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"icon.png\"\r\n";
-    partHead += "Content-Type: image/png\r\n\r\n";
+    // 2. Parameter: time=1h
+    bodyHead += "--" + boundary_id + "\r\n";
+    bodyHead += "Content-Disposition: form-data; name=\"time\"\r\n\r\n";
+    bodyHead += "1h\r\n";
 
-    // 2. Tail part
-    std::string partTail = "\r\n--" + boundary + "--\r\n";
+    // 3. File: fileToUpload
+    bodyHead += "--" + boundary_id + "\r\n";
+    bodyHead += "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"icon.png\"\r\n";
+    bodyHead += "Content-Type: image/png\r\n\r\n";
 
-    // 3. Rakit Payload
+    // 4. End Boundary
+    std::string bodyTail = "\r\n--" + boundary_id + "--\r\n";
+
+    // Susun Payload Body Binary
     std::vector<BYTE> fullBody;
-    fullBody.insert(fullBody.end(), partHead.begin(), partHead.end());
+    fullBody.insert(fullBody.end(), bodyHead.begin(), bodyHead.end());
     fullBody.insert(fullBody.end(), file_data.begin(), file_data.end());
-    fullBody.insert(fullBody.end(), partTail.begin(), partTail.end());
+    fullBody.insert(fullBody.end(), bodyTail.begin(), bodyTail.end());
 
-    printf("[DEBUG] Sending HTTP POST to Litterbox... Total Body: %zu bytes\n", fullBody.size());
+    printf("[DEBUG] Sending payload (%zu bytes) to Litterbox...\n", fullBody.size());
 
     BOOL bResults = WinHttpSendRequest(hRequest,
                                        headers.c_str(), (DWORD)-1,
@@ -96,18 +80,12 @@ inline std::string upload_to_litterbox(const std::vector<BYTE>& file_data) {
                                        (DWORD)fullBody.size(),
                                        (DWORD)fullBody.size(), 0);
 
-    if (bResults) {
-        bResults = WinHttpReceiveResponse(hRequest, nullptr);
-    } else {
-        printf("[DEBUG] WinHttpSendRequest Gagal! Error: %lu\n", GetLastError());
-    }
+    if (bResults) bResults = WinHttpReceiveResponse(hRequest, nullptr);
 
-    // Ambil HTTP Status Code
     DWORD dwStatusCode = 0;
     DWORD dwSize = sizeof(dwStatusCode);
     WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                         WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
-    printf("[DEBUG] HTTP Status Code: %lu\n", dwStatusCode);
 
     std::string response;
     if (bResults) {
@@ -127,16 +105,16 @@ inline std::string upload_to_litterbox(const std::vector<BYTE>& file_data) {
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    // Trim whitespace
+    // Trim whitespace/newline
     while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
         response.pop_back();
 
-    printf("[DEBUG] Raw Response Server: '%s'\n", response.c_str());
+    printf("[DEBUG] HTTP Status: %lu | Response: %s\n", dwStatusCode, response.c_str());
 
     return response;
 }
 
-// Handler Cache & URL
+// Handler Cache & Upload
 inline std::string get_or_upload_icon_url(const std::string& exe_name, const std::string& png_path) {
     const std::string cache_file = "icons/cache.json";
     json cacheObj = json::object();
@@ -153,7 +131,6 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
         return cached_url;
     }
 
-    printf("[DEBUG] Membaca file ikon dari: %s\n", png_path.c_str());
     auto bytes = read_png_bytes(png_path);
     if (bytes.empty()) {
         printf("[ICON] Error: Gagal membaca file ikon PNG!\n");
@@ -170,7 +147,7 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
         if (out.is_open()) out << cacheObj.dump(4);
         return url;
     } else {
-        printf("[ICON] Litterbox Fail: %s\n", url.c_str());
+        printf("[ICON] Litterbox Fail!\n");
         return "";
     }
 }
