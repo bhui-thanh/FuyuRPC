@@ -1,7 +1,6 @@
 #pragma once
 #include <windows.h>
 #include <winhttp.h>
-#include <wincrypt.h>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -9,22 +8,9 @@
 
 using json = nlohmann::json;
 #pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "crypt32.lib")
 
-// Encode raw bytes ke string Base64
-inline std::string base64_encode(const std::vector<BYTE>& data) {
-    DWORD outLen = 0;
-    CryptBinaryToStringA(data.data(), (DWORD)data.size(), 
-                         CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &outLen);
-    std::string out(outLen, '\0');
-    CryptBinaryToStringA(data.data(), (DWORD)data.size(), 
-                         CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, &out[0], &outLen);
-    if (!out.empty() && out.back() == '\0') out.pop_back();
-    return out;
-}
-
-// Baca file PNG lokal ke binary buffer
-inline std::vector<BYTE> read_file(const std::string& path) {
+// Baca file PNG binary
+inline std::vector<BYTE> read_binary_file(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) return {};
     std::streamsize size = file.tellg();
@@ -34,29 +20,24 @@ inline std::vector<BYTE> read_file(const std::string& path) {
     return buffer;
 }
 
-// Request HTTP menggunakan WinHTTP bawaan Windows
-inline std::string discord_api_request(const std::string& method,
-                                      const std::string& endpoint,
-                                      const std::string& bot_token,
-                                      const std::string& json_body = "") {
-    HINTERNET hSession = WinHttpOpen(L"DiscordPresenceUploader/1.0",
+// Upload multipart/form-data ke Catbox
+inline std::string upload_to_catbox(const std::string& png_path) {
+    auto fileBytes = read_binary_file(png_path);
+    if (fileBytes.empty()) {
+        printf("[UPLOADER] Gagal membaca file: %s\n", png_path.c_str());
+        return "";
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"DiscordPresence/1.0",
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return "";
 
-    HINTERNET hConnect = WinHttpConnect(hSession, L"discord.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, L"catbox.moe", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
 
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, endpoint.c_str(), -1, nullptr, 0);
-    std::wstring wEndpoint(wlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, endpoint.c_str(), -1, &wEndpoint[0], wlen);
-
-    int wmlen = MultiByteToWideChar(CP_UTF8, 0, method.c_str(), -1, nullptr, 0);
-    std::wstring wMethod(wmlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, method.c_str(), -1, &wMethod[0], wmlen);
-
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, wMethod.c_str(), wEndpoint.c_str(),
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/user/api.php",
                                            nullptr, WINHTTP_NO_REFERER,
                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            WINHTTP_FLAG_SECURE);
@@ -66,16 +47,32 @@ inline std::string discord_api_request(const std::string& method,
         return "";
     }
 
-    std::string authHeader = "Authorization: Bot " + bot_token + "\r\nContent-Type: application/json\r\n";
-    int whlen = MultiByteToWideChar(CP_UTF8, 0, authHeader.c_str(), -1, nullptr, 0);
-    std::wstring wHeaders(whlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, authHeader.c_str(), -1, &wHeaders[0], whlen);
+    std::string boundary = "----DiscordPresenceBoundary123456";
+    std::string header = "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n";
+    int whlen = MultiByteToWideChar(CP_UTF8, 0, header.c_str(), -1, nullptr, 0);
+    std::wstring wHeader(whlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, header.c_str(), -1, &wHeader[0], whlen);
+
+    // Build Payload Body
+    std::string bodyHead = "--" + boundary + "\r\n"
+                           "Content-Disposition: form-data; name=\"reqtype\"\r\n\r\n"
+                           "fileupload\r\n"
+                           "--" + boundary + "\r\n"
+                           "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"icon.png\"\r\n"
+                           "Content-Type: image/png\r\n\r\n";
+
+    std::string bodyTail = "\r\n--" + boundary + "--\r\n";
+
+    std::vector<BYTE> fullBody;
+    fullBody.insert(fullBody.end(), bodyHead.begin(), bodyHead.end());
+    fullBody.insert(fullBody.end(), fileBytes.begin(), fileBytes.end());
+    fullBody.insert(fullBody.end(), bodyTail.begin(), bodyTail.end());
 
     BOOL bResults = WinHttpSendRequest(hRequest,
-                                       wHeaders.c_str(), (DWORD)-1,
-                                       (LPVOID)json_body.c_str(),
-                                       (DWORD)json_body.length(),
-                                       (DWORD)json_body.length(), 0);
+                                       wHeader.c_str(), (DWORD)-1,
+                                       fullBody.data(),
+                                       (DWORD)fullBody.size(),
+                                       (DWORD)fullBody.size(), 0);
 
     if (bResults) bResults = WinHttpReceiveResponse(hRequest, nullptr);
 
@@ -95,83 +92,49 @@ inline std::string discord_api_request(const std::string& method,
     }
 
     WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
+    WinHttpConnect(hSession, L"catbox.moe", INTERNET_DEFAULT_HTTPS_PORT, 0);
     WinHttpCloseHandle(hSession);
+
+    // Trim whitespace
+    while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
+        response.pop_back();
+
     return response;
 }
 
-// Bersihkan nama agar valid di Discord (1-32 chars, a-z, 0-9, _)
-inline std::string sanitize_asset_name(const std::string& name) {
-    std::string out;
-    for (char c : name) {
-        if (isalnum((unsigned char)c) || c == '_') {
-            out += (char)tolower((unsigned char)c);
-        } else if (c == '.' || c == '-' || c == ' ') {
-            out += '_';
+// Check Local Cache & Auto-Upload
+inline std::string get_or_upload_icon_url(const std::string& exe_name, const std::string& png_path) {
+    const std::string cache_file = "icons/cache.json";
+    json cacheObj = json::object();
+
+    // 1. Baca cache lokal
+    std::ifstream in(cache_file);
+    if (in.is_open()) {
+        try { in >> cacheObj; } catch (...) {}
+        in.close();
+    }
+
+    if (cacheObj.contains(exe_name) && cacheObj[exe_name].is_string()) {
+        std::string cached_url = cacheObj[exe_name].get<std::string>();
+        printf("[ICON] Using cached URL: %s\n", cached_url.c_str());
+        return cached_url;
+    }
+
+    // 2. Upload jika belum ada di cache
+    printf("[ICON] Uploading extracted icon to CDN...\n");
+    std::string uploaded_url = upload_to_catbox(png_path);
+
+    if (!uploaded_url.empty() && uploaded_url.rfind("http", 0) == 0) {
+        printf("[ICON] SUCCESS! Uploaded to: %s\n", uploaded_url.c_str());
+        // Simpan ke cache
+        cacheObj[exe_name] = uploaded_url;
+        std::ofstream out(cache_file);
+        if (out.is_open()) {
+            out << cacheObj.dump(4);
         }
-        if (out.size() >= 32) break;
+        return uploaded_url;
+    } else {
+        printf("[ICON] Upload failed! Response: %s\n", uploaded_url.c_str());
+        return "";
     }
-    return out.empty() ? "game_icon" : out;
-}
-
-// Fungsi Utama: Check & Auto-Upload Asset
-inline std::string sync_and_upload_icon(const std::string& app_id,
-                                       const std::string& bot_token,
-                                       const std::string& raw_name,
-                                       const std::string& png_file_path) {
-    std::string asset_name = sanitize_asset_name(raw_name);
-
-    if (bot_token.empty()) {
-        printf("[API] Warning: Bot token is empty. Skipping auto-upload.\n");
-        return asset_name;
-    }
-
-    printf("[API] Checking existing assets on Discord Developer Portal...\n");
-    std::string endpoint = "/api/v10/oauth2/applications/" + app_id + "/assets";
-    std::string listRes = discord_api_request("GET", endpoint, bot_token);
-
-    if (!listRes.empty()) {
-        try {
-            auto jList = json::parse(listRes);
-            if (jList.is_array()) {
-                for (const auto& item : jList) {
-                    if (item.value("name", "") == asset_name) {
-                        printf("[API] Asset '%s' already exists in portal! Reusing...\n", asset_name.c_str());
-                        return asset_name;
-                    }
-                }
-            }
-        } catch (...) {}
-    }
-
-    // Jika belum ada, lakukan upload
-    printf("[API] Uploading '%s' to Discord Developer Portal...\n", asset_name.c_str());
-
-    auto bytes = read_file(png_file_path);
-    if (bytes.empty()) {
-        printf("[API] Failed to read PNG file: %s\n", png_file_path.c_str());
-        return asset_name;
-    }
-
-    std::string base64Data = "data:image/png;base64," + base64_encode(bytes);
-
-    json payload;
-    payload["name"] = asset_name;
-    payload["type"] = "1"; // 1 = LARGE asset
-    payload["image"] = base64Data;
-
-    std::string postRes = discord_api_request("POST", endpoint, bot_token, payload.dump());
-
-    try {
-        auto resObj = json::parse(postRes);
-        if (resObj.contains("id") || resObj.value("name", "") == asset_name) {
-            printf("[API] SUCCESS! Asset '%s' uploaded successfully!\n", asset_name.c_str());
-        } else {
-            printf("[API] Upload Response: %s\n", postRes.c_str());
-        }
-    } catch (...) {
-        printf("[API] Error parsing response: %s\n", postRes.c_str());
-    }
-
-    return asset_name;
 }
