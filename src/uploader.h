@@ -9,7 +9,7 @@
 using json = nlohmann::json;
 #pragma comment(lib, "winhttp.lib")
 
-// Baca binary PNG
+// Baca file PNG lokal ke binary buffer
 inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) return {};
@@ -20,20 +20,20 @@ inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     return buffer;
 }
 
-// Upload ke Catbox (Presisi 1:1 seperti Python requests)
-inline std::string upload_to_catbox(const std::vector<BYTE>& bytes, const std::string& filename) {
+// Upload ke Litterbox API (https://litterbox.catbox.moe/resources/internals/api.php)
+inline std::string upload_to_litterbox(const std::vector<BYTE>& bytes, const std::string& filename) {
     if (bytes.empty()) return "";
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return "";
 
-    HINTERNET hConnect = WinHttpConnect(hSession, L"catbox.moe", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, L"litterbox.catbox.moe", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
 
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/user/api.php",
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/resources/internals/api.php",
                                            nullptr, WINHTTP_NO_REFERER,
                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            WINHTTP_FLAG_SECURE);
@@ -43,32 +43,38 @@ inline std::string upload_to_catbox(const std::vector<BYTE>& bytes, const std::s
         return "";
     }
 
-    std::string boundary = "----WebKitFormBoundaryFuyuRPC7MA4YWxk";
+    std::string boundary = "----WebKitFormBoundaryLitterboxFuyuRPC";
     std::string headers = "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n";
     
     int whlen = MultiByteToWideChar(CP_UTF8, 0, headers.c_str(), -1, nullptr, 0);
     std::wstring wHeaders(whlen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, headers.c_str(), -1, &wHeaders[0], whlen);
 
-    // Form Part 1: reqtype = fileupload (Sesuai Python data={'reqtype':'fileupload'})
+    // Part 1: reqtype = fileupload
     std::string p1 = "--" + boundary + "\r\n"
                      "Content-Disposition: form-data; name=\"reqtype\"\r\n\r\n"
                      "fileupload\r\n";
 
-    // Form Part 2: fileToUpload (Sesuai Python files={'fileToUpload': f})
+    // Part 2: time = 24h (Bisa 1h, 12h, 24h, 72h)
     std::string p2 = "--" + boundary + "\r\n"
+                     "Content-Disposition: form-data; name=\"time\"\r\n\r\n"
+                     "24h\r\n";
+
+    // Part 3: fileToUpload
+    std::string p3 = "--" + boundary + "\r\n"
                      "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"" + filename + "\"\r\n"
                      "Content-Type: image/png\r\n\r\n";
 
     // End Boundary
-    std::string p3 = "\r\n--" + boundary + "--\r\n";
+    std::string p4 = "\r\n--" + boundary + "--\r\n";
 
-    // Gabungkan Payload Binary
+    // Susun Payload
     std::vector<BYTE> body;
     body.insert(body.end(), p1.begin(), p1.end());
     body.insert(body.end(), p2.begin(), p2.end());
-    body.insert(body.end(), bytes.begin(), bytes.end());
     body.insert(body.end(), p3.begin(), p3.end());
+    body.insert(body.end(), bytes.begin(), bytes.end());
+    body.insert(body.end(), p4.begin(), p4.end());
 
     BOOL bResults = WinHttpSendRequest(hRequest,
                                        wHeaders.c_str(), (DWORD)-1,
@@ -96,19 +102,19 @@ inline std::string upload_to_catbox(const std::vector<BYTE>& bytes, const std::s
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    // Trim newline response dari Catbox (misal: "https://files.catbox.moe/abc.png\n")
+    // Trim response
     while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
         response.pop_back();
 
     return response;
 }
 
-// Handler Cache & Upload
+// Cache & Upload Handler
 inline std::string get_or_upload_icon_url(const std::string& exe_name, const std::string& png_path) {
     const std::string cache_file = "icons/cache.json";
     json cacheObj = json::object();
 
-    // 1. Cek Cache Lokal
+    // 1. Cek Cache
     std::ifstream in(cache_file);
     if (in.is_open()) {
         try { in >> cacheObj; } catch (...) {}
@@ -117,18 +123,18 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
 
     if (cacheObj.contains(exe_name) && cacheObj[exe_name].is_string()) {
         std::string cached_url = cacheObj[exe_name].get<std::string>();
-        printf("[ICON] Using cached Catbox URL: %s\n", cached_url.c_str());
+        printf("[ICON] Using cached Litterbox URL: %s\n", cached_url.c_str());
         return cached_url;
     }
 
     auto bytes = read_png_bytes(png_path);
     if (bytes.empty()) {
-        printf("[ICON] Gagal membaca PNG file: %s\n", png_path.c_str());
+        printf("[ICON] Failed to read PNG file: %s\n", png_path.c_str());
         return "";
     }
 
-    printf("[ICON] Uploading icon to Catbox (No API Key Needed)...\n");
-    std::string url = upload_to_catbox(bytes, exe_name + ".png");
+    printf("[ICON] Uploading icon to Litterbox CDN...\n");
+    std::string url = upload_to_litterbox(bytes, exe_name + ".png");
 
     if (!url.empty() && url.rfind("http", 0) == 0) {
         printf("[ICON] SUCCESS! Direct URL: %s\n", url.c_str());
@@ -139,7 +145,7 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
         }
         return url;
     } else {
-        printf("[ICON] Catbox Upload Failed: %s\n", url.c_str());
+        printf("[ICON] Litterbox Upload Failed: %s\n", url.c_str());
         return "";
     }
 }
