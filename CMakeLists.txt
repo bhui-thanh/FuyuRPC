@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16...3.30)
 
+# Izinkan CMake lawas berjalan di versi CMake modern
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
 
 project(DiscordPresence LANGUAGES CXX C)
@@ -9,28 +10,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# Matikan build examples discord-rpc
+# 1. Matikan ClangFormat bawaan discord-rpc agar tidak error formatting
+set(CLANG_FORMAT_EXE "CLANG_FORMAT_EXE-NOTFOUND" CACHE FILEPATH "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
-# --- 1. Discord RPC (dengan auto-fix file .clang-format) ---
+# --- Discord RPC ---
 FetchContent_Declare(
     discord_rpc
     GIT_REPOSITORY https://github.com/discord/discord-rpc.git
     GIT_TAG        master
+    PATCH_COMMAND  ${CMAKE_COMMAND} -E rm -f .clang-format
 )
+FetchContent_MakeAvailable(discord_rpc)
 
-FetchContent_GetProperties(discord_rpc)
-if(NOT discord_rpc_POPULATED)
-    FetchContent_Populate(discord_rpc)
-    
-    # Hapus file .clang-format yang korup dari discord-rpc
-    file(REMOVE "${discord_rpc_SOURCE_DIR}/.clang-format")
-    
-    # Masukkan sebagai subproject
-    add_subdirectory(${discord_rpc_SOURCE_DIR} ${discord_rpc_BINARY_DIR} EXCLUDE_FROM_ALL)
-endif()
-
-# --- 2. JSON Parser ---
+# --- JSON Parser ---
 FetchContent_Declare(
     json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -38,7 +31,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
-# --- Target Executable ---
+# --- Executable Target ---
 add_executable(discord_presence src/main.cpp)
 
 target_include_directories(discord_presence PRIVATE src)
