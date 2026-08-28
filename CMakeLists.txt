@@ -1,21 +1,28 @@
-cmake_minimum_required(VERSION 3.16)
-project(DiscordPresence LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.16...3.30)
+
+set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
+
+project(DiscordPresence LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# --- 1. Auto-download Discord RPC ---
+# Matikan ClangFormat bawaan discord-rpc
+set(CLANG_FORMAT_EXE "CLANG_FORMAT_EXE-NOTFOUND" CACHE FILEPATH "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+# --- Discord RPC ---
 FetchContent_Declare(
     discord_rpc
     GIT_REPOSITORY https://github.com/discord/discord-rpc.git
     GIT_TAG        master
+    PATCH_COMMAND  ${CMAKE_COMMAND} -E rm -f .clang-format
 )
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(discord_rpc)
 
-# --- 2. Auto-download nlohmann/json ---
+# --- JSON Parser ---
 FetchContent_Declare(
     json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -23,10 +30,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
-# --- Target Executable ---
+# --- Executable Target ---
 add_executable(discord_presence src/main.cpp)
 
-target_include_directories(discord_presence PRIVATE src)
+target_include_directories(discord_presence PRIVATE 
+    src
+    ${discord_rpc_SOURCE_DIR}/include
+)
+
 target_link_libraries(discord_presence PRIVATE
     discord-rpc
     nlohmann_json::nlohmann_json
@@ -42,10 +53,4 @@ target_compile_definitions(discord_presence PRIVATE
     _CRT_SECURE_NO_WARNINGS
     UNICODE
     _UNICODE
-)
-
-add_custom_command(TARGET discord_presence POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/config.json
-        $<TARGET_FILE_DIR:discord_presence>/config.json
 )

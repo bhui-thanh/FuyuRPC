@@ -4,6 +4,8 @@
 #include <csignal>
 #include <atomic>
 #include <fstream>
+#include <string>
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 #include "picker.h"
@@ -15,30 +17,89 @@ using json = nlohmann::json;
 static std::atomic<bool> g_running{true};
 static void sig(int) { g_running = false; }
 
+// Hapus ekstensi .exe / .EXE dari nama process
+inline std::string strip_exe(std::string name) {
+    if (name.size() >= 4) {
+        std::string ext = name.substr(name.size() - 4);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".exe") {
+            name = name.substr(0, name.size() - 4);
+        }
+    }
+    return name;
+}
+
+// Format durasi: "Playing for 5 minutes" / "Playing for 2 hours" dll.
+inline std::string format_playtime(long long total_seconds) {
+    long long mins  = total_seconds / 60;
+    long long hours = mins / 60;
+    long long days  = hours / 24;
+
+    char buf[128];
+
+    if (days > 0) {
+        long long rem_hours = hours % 24;
+        if (rem_hours > 0)
+            snprintf(buf, sizeof(buf),
+                     "Playing for %lld day%s %lld hour%s",
+                     days,  days  == 1 ? "" : "s",
+                     rem_hours, rem_hours == 1 ? "" : "s");
+        else
+            snprintf(buf, sizeof(buf),
+                     "Playing for %lld day%s",
+                     days, days == 1 ? "" : "s");
+    }
+    else if (hours > 0) {
+        long long rem_mins = mins % 60;
+        if (rem_mins > 0)
+            snprintf(buf, sizeof(buf),
+                     "Playing for %lld hour%s %lld minute%s",
+                     hours, hours == 1 ? "" : "s",
+                     rem_mins, rem_mins == 1 ? "" : "s");
+        else
+            snprintf(buf, sizeof(buf),
+                     "Playing for %lld hour%s",
+                     hours, hours == 1 ? "" : "s");
+    }
+    else if (mins > 0) {
+        snprintf(buf, sizeof(buf),
+                 "Playing for %lld minute%s",
+                 mins, mins == 1 ? "" : "s");
+    }
+    else {
+        snprintf(buf, sizeof(buf), "Just started");
+    }
+
+    return std::string(buf);
+}
+
 int main() {
     std::signal(SIGINT, sig);
     std::signal(SIGTERM, sig);
 
     printf("╔════════════════════════════════════════════════╗\n");
-    printf("║ Discord Rich Presence — Full Auto Icon Sync   ║\n");
+    printf("║ Discord Rich Presence — Litterbox Auto Mode    ║\n");
     printf("╚════════════════════════════════════════════════╝\n\n");
 
     json cfg;
     {
         std::ifstream f("config.json");
         if (f.is_open()) cfg = json::parse(f, nullptr, false);
-        if (cfg.is_discarded()) {
-            printf("[ERR] config.json invalid or missing!\n");
-            return 1;
+        if (cfg.is_discarded() || cfg.empty()) {
+            cfg["app_id"] = "";
+            cfg["update_ms"] = 5000;
+            std::ofstream out("config.json");
+            out << cfg.dump(4);
         }
     }
 
-    std::string app_id    = cfg.value("app_id", "");
-    std::string bot_token = cfg.value("bot_token", "");
-    int update_ms         = cfg.value("update_ms", 5000);
+    std::string app_id = cfg.value("app_id", "");
+    int update_ms      = cfg.value("update_ms", 5000);
 
     if (app_id.empty()) {
-        printf("[ERR] Set app_id in config.json first!\n");
+        printf("[ERR] Set 'app_id' in config.json first!\n");
+        printf("Press Enter to exit...");
+        getchar();
         return 1;
     }
 
@@ -64,23 +125,36 @@ int main() {
         return 0;
     }
 
+    // Nama tampilan: chrome.exe → chrome
+    std::string display_name = strip_exe(selected.exe_name);
+
+    // Window title lebih bagus? pakai kalau ada
+    if (!selected.window_title.empty()) {
+        // optional: pakai window title sebagai nama
+        // display_name = selected.window_title;
+    }
+
     // === AUTO EXTRACT & UPLOAD ICON ===
-    std::string asset_key = "default";
+    std::string icon_url = "";
     if (!selected.full_path.empty()) {
         std::string png_path = extract_exe_icon(selected.full_path, selected.exe_name);
         if (!png_path.empty()) {
-            // Upload otomatis ke Discord via API
-            asset_key = sync_and_upload_icon(app_id, bot_token, selected.exe_name, png_path);
+            icon_url = get_or_upload_icon_url(selected.exe_name, png_path);
         }
     }
 
     // === PRESENCE LOOP ===
     auto start_time = std::chrono::system_clock::now();
-    int64_t start_ts = std::chrono::duration_cast<std::chrono::seconds>(
-                           start_time.time_since_epoch()).count();
 
-    printf("\n[PRESENCE] Running Rich Presence for: %s\n", selected.exe_name.c_str());
+    // startTimestamp = 0 → sembunyikan timer bawaan Discord (0:27)
+    // kita pakai teks custom "Playing for X minutes" saja
+    int64_t start_ts = 0;
+
+    printf("\n[PRESENCE] Tracking: %s\n", display_name.c_str());
     printf("[PRESENCE] Press Ctrl+C to exit.\n\n");
+    printf("[TIP] Baris 'Playing FuyuRPC' = nama App di Developer Portal.\n");
+    printf("      Rename app di https://discord.com/developers/applications\n");
+    printf("      agar tidak menampilkan nama App ID.\n\n");
 
     while (g_running) {
         Discord_RunCallbacks();
@@ -91,20 +165,20 @@ int main() {
 
         if (alive) {
             auto now = std::chrono::system_clock::now();
-            auto mins = std::chrono::duration_cast<std::chrono::minutes>(now - start_time).count();
-            auto hrs  = mins / 60;
-            mins %= 60;
+            auto elapsed_sec = std::chrono::duration_cast<std::chrono::seconds>(
+                                   now - start_time).count();
 
-            char timebuf[64];
-            snprintf(timebuf, sizeof(timebuf), "%02lld:%02lld", hrs, mins);
+            // details = nama exe tanpa .exe
+            // state   = "Playing for X minutes"
+            std::string details = display_name;
+            std::string state   = format_playtime(elapsed_sec);
+            std::string large_text = display_name; // tooltip saat hover icon
 
-            std::string details = "Playing " + selected.exe_name;
-            std::string state   = std::string("Time: ") + timebuf;
-            std::string title   = selected.window_title.empty()
-                                      ? selected.exe_name
-                                      : selected.window_title;
+            rpc_set(details, state, icon_url, large_text, start_ts);
 
-            rpc_set(details, state, asset_key, title, start_ts);
+            // Log ke console tiap update (opsional)
+            // printf("\r[RPC] %s | %s          ", details.c_str(), state.c_str());
+            // fflush(stdout);
         } else {
             printf("[PRESENCE] Process ended.\n");
             rpc_clear();
