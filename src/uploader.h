@@ -4,12 +4,36 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <cstdio>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 #pragma comment(lib, "winhttp.lib")
 
-// Baca file PNG binary
+// 1. Upload via Windows Native curl.exe (Sesuai Dokumentasi Resmi Litterbox)
+inline std::string upload_via_curl(const std::string& png_path) {
+    // Jalankan cURL bawaan Windows 10/11
+    std::string cmd = "curl.exe -s -F \"reqtype=fileupload\" -F \"time=24h\" -F \"fileToUpload=@" + png_path + "\" https://litterbox.catbox.moe/resources/internals/api.php";
+    
+    FILE* pipe = _popen(cmd.c_str(), "r");
+    if (!pipe) return "";
+
+    char buffer[128];
+    std::string result = "";
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+        result += buffer;
+    }
+    _pclose(pipe);
+
+    // Trim whitespace/newline
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r' || result.back() == ' '))
+        result.pop_back();
+
+    return result;
+}
+
+// 2. Baca file PNG lokal (untuk fallback)
 inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) return {};
@@ -20,14 +44,13 @@ inline std::vector<BYTE> read_png_bytes(const std::string& path) {
     return buffer;
 }
 
-// Upload ke Litterbox (Format Multipart Presisi 1:1)
-inline std::string upload_to_litterbox(const std::vector<BYTE>& file_data) {
+// 3. Fallback WinHttp (Dengan WinHttpAddRequestHeaders yang sudah diperbaiki)
+inline std::string upload_via_winhttp(const std::vector<BYTE>& file_data) {
     if (file_data.empty()) return "";
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                     WINHTTP_NO_PROXY_NAME,
-                                     WINHTTP_NO_PROXY_BYPASS, 0);
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return "";
 
     HINTERNET hConnect = WinHttpConnect(hSession, L"litterbox.catbox.moe", INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -43,49 +66,28 @@ inline std::string upload_to_litterbox(const std::vector<BYTE>& file_data) {
         return "";
     }
 
-    // Boundary Murni Tanpa Prefix Dash Tambahan
-    std::string boundary_id = "FuyuRPCBoundary123456789";
-    std::wstring headers = L"Content-Type: multipart/form-data; boundary=FuyuRPCBoundary123456789\r\n";
+    std::wstring contentType = L"Content-Type: multipart/form-data; boundary=FuyuRPCBoundary123456";
+    WinHttpAddRequestHeaders(hRequest, contentType.c_str(), -1L, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
 
-    // 1. Parameter: reqtype=fileupload
-    std::string bodyHead = "";
-    bodyHead += "--" + boundary_id + "\r\n";
-    bodyHead += "Content-Disposition: form-data; name=\"reqtype\"\r\n\r\n";
-    bodyHead += "fileupload\r\n";
+    std::string boundary = "FuyuRPCBoundary123456";
+    std::string bodyHead = "--" + boundary + "\r\n"
+                           "Content-Disposition: form-data; name=\"reqtype\"\r\n\r\nfileupload\r\n"
+                           "--" + boundary + "\r\n"
+                           "Content-Disposition: form-data; name=\"time\"\r\n\r\n24h\r\n"
+                           "--" + boundary + "\r\n"
+                           "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"icon.png\"\r\n"
+                           "Content-Type: image/png\r\n\r\n";
+    std::string bodyTail = "\r\n--" + boundary + "--\r\n";
 
-    // 2. Parameter: time=1h
-    bodyHead += "--" + boundary_id + "\r\n";
-    bodyHead += "Content-Disposition: form-data; name=\"time\"\r\n\r\n";
-    bodyHead += "1h\r\n";
+    std::vector<BYTE> body;
+    body.insert(body.end(), bodyHead.begin(), bodyHead.end());
+    body.insert(body.end(), file_data.begin(), file_data.end());
+    body.insert(body.end(), bodyTail.begin(), bodyTail.end());
 
-    // 3. File: fileToUpload
-    bodyHead += "--" + boundary_id + "\r\n";
-    bodyHead += "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"icon.png\"\r\n";
-    bodyHead += "Content-Type: image/png\r\n\r\n";
-
-    // 4. End Boundary
-    std::string bodyTail = "\r\n--" + boundary_id + "--\r\n";
-
-    // Susun Payload Body Binary
-    std::vector<BYTE> fullBody;
-    fullBody.insert(fullBody.end(), bodyHead.begin(), bodyHead.end());
-    fullBody.insert(fullBody.end(), file_data.begin(), file_data.end());
-    fullBody.insert(fullBody.end(), bodyTail.begin(), bodyTail.end());
-
-    printf("[DEBUG] Sending payload (%zu bytes) to Litterbox...\n", fullBody.size());
-
-    BOOL bResults = WinHttpSendRequest(hRequest,
-                                       headers.c_str(), (DWORD)-1,
-                                       fullBody.data(),
-                                       (DWORD)fullBody.size(),
-                                       (DWORD)fullBody.size(), 0);
+    BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                       body.data(), (DWORD)body.size(), (DWORD)body.size(), 0);
 
     if (bResults) bResults = WinHttpReceiveResponse(hRequest, nullptr);
-
-    DWORD dwStatusCode = 0;
-    DWORD dwSize = sizeof(dwStatusCode);
-    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                        WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
 
     std::string response;
     if (bResults) {
@@ -105,20 +107,18 @@ inline std::string upload_to_litterbox(const std::vector<BYTE>& file_data) {
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    // Trim whitespace/newline
     while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
         response.pop_back();
-
-    printf("[DEBUG] HTTP Status: %lu | Response: %s\n", dwStatusCode, response.c_str());
 
     return response;
 }
 
-// Handler Cache & Upload
+// Handler Cache & Upload Utama
 inline std::string get_or_upload_icon_url(const std::string& exe_name, const std::string& png_path) {
     const std::string cache_file = "icons/cache.json";
     json cacheObj = json::object();
 
+    // 1. Cek Cache
     std::ifstream in(cache_file);
     if (in.is_open()) {
         try { in >> cacheObj; } catch (...) {}
@@ -131,14 +131,18 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
         return cached_url;
     }
 
-    auto bytes = read_png_bytes(png_path);
-    if (bytes.empty()) {
-        printf("[ICON] Error: Gagal membaca file ikon PNG!\n");
-        return "";
-    }
+    // 2. Metode 1: Pakai Native Windows cURL
+    printf("[ICON] Uploading to Litterbox via Windows cURL...\n");
+    std::string url = upload_via_curl(png_path);
 
-    printf("[ICON] Uploading to Litterbox CDN...\n");
-    std::string url = upload_to_litterbox(bytes);
+    // 3. Metode 2: Fallback WinHttp jika cURL tidak merespon
+    if (url.empty() || url.rfind("http", 0) != 0) {
+        printf("[ICON] cURL fallback to WinHttp API...\n");
+        auto bytes = read_png_bytes(png_path);
+        if (!bytes.empty()) {
+            url = upload_via_winhttp(bytes);
+        }
+    }
 
     if (!url.empty() && url.rfind("http", 0) == 0) {
         printf("[ICON] SUCCESS! Direct URL: %s\n", url.c_str());
@@ -147,7 +151,7 @@ inline std::string get_or_upload_icon_url(const std::string& exe_name, const std
         if (out.is_open()) out << cacheObj.dump(4);
         return url;
     } else {
-        printf("[ICON] Litterbox Fail!\n");
+        printf("[ICON] Litterbox Fail Response: %s\n", url.c_str());
         return "";
     }
 }
